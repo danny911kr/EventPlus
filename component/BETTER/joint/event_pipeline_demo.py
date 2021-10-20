@@ -20,6 +20,10 @@ import pdb
 from EventPipeline import EventPipeline
 from JsonBuilder import JsonBuilder
 
+from src.config import context_models
+from src.data import TransformersNERDataset
+from src.model import TransformersCRF
+
 def str2bool(v):
     if isinstance(v, bool):
         return v
@@ -154,12 +158,18 @@ class BETTER_API:
         args.ner_weight=0.0
         model = BertClassifier(args)
         # specify NER model attributes
-        args.use_crf_ner=True
-        args.use_att=True
-        args.bert_model_type='bert-large-cased'
-        args.hid_lastmlp=512
-        args.ner_weight=1.0
-        model_ner = BertClassifier(args)
+        # args.use_crf_ner=True
+        # args.use_att=True
+        # args.bert_model_type='bert-large-cased'
+        # args.hid_lastmlp=512
+        # args.ner_weight=1.0
+        folder_name = args.load_model_path_ner
+        assert os.path.isdir(folder_name)
+        f = open(folder_name + "/config.conf", 'rb')
+        self.conf = pickle.load(f)
+        f.close()
+        model_ner = TransformersCRF(self.conf)
+
         self.system = EventPipeline(args, model, model_t, model_ner)
         self.system.load(filename=os.path.join(args.base_dir, args.load_model_path), filename_t=os.path.join(args.base_dir, args.load_model_path_t), filename_ner=os.path.join(args.base_dir, args.load_model_path_ner))
 
@@ -172,6 +182,7 @@ class BETTER_API:
         self.system.predict_pipeline(input_sent)
         json_out = json_builder.from_preds(input_sent, y_preds_t, y_preds_e, y_preds_ner)
         return json_out
+
 def main(args):
     api = BETTER_API()
     # input_sent = ['Yesterday', 'New', 'York', 'governor', 'George', 'Pataki', 'toured', 'five', 'counties', 'that', 'have', 'been', 'declared', 'under', 'a', 'state', 'of', 'emergency']
@@ -273,7 +284,7 @@ if __name__ == '__main__':
     p.add_argument('-load_model', type=str2bool, default=True)
     p.add_argument('-load_model_path', type=str, default='worked_model_ace/baseline_repro.pt')
     p.add_argument('-load_model_path_t', type=str, default='worked_model_ace/singletrigger_bertlarge2.pt')
-    p.add_argument('-load_model_path_ner', type=str, default='worked_model_ace/ner_bertlarge.pt')
+    p.add_argument('-load_model_path_ner', type=str, default='conll_all')
     p.add_argument('-load_model_single', type=str2bool, default=True)
     args = p.parse_args()
 

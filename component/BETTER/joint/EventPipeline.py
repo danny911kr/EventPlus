@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.nn import Parameter
+from torch.utils.data import DataLoader
 from dataset import *
 import numpy as np
 from util import Logger
@@ -16,7 +17,9 @@ from transformers import BertTokenizer, BertModel, BertConfig
 from neural_model import BertClassifier
 from generate_data.contextualized_features_bert import bert_token
 
-
+from src.config import context_models
+from src.data import TransformersNERDataset
+from src.model import TransformersCRF
 
 def get_tri_idx_from_mix_sent(out_t, B2I):
     '''
@@ -313,13 +316,41 @@ class EventPipeline(nn.Module):
             crf_mask = crf_mask.cuda()
 
         # NER prediction
-        self.args.bert_encode_mthd='max'
-        out_ner, _, crf_loss_ner, _ = self.best_model_ner(sents, None, lengths, task='ner',
-                                   crf=True, seq_tags=None, crf_mask=crf_mask,
-                                   use_att=True, orig_to_tok_map=[orig_to_tok_map], bert_attn_mask=bert_attn_mask)
-        ner_label, ner_pred = get_prediction_crf(lengths, None, out_ner)
-        y_preds_ner.extend(ner_pred)
-        argu_cands = torch.LongTensor(ner_pred)
+        # self.args.bert_encode_mthd='max'
+        # out_ner, _, crf_loss_ner, _ = self.best_model_ner(sents, None, lengths, task='ner',
+        #                            crf=True, seq_tags=None, crf_mask=crf_mask,
+        #                            use_att=True, orig_to_tok_map=[orig_to_tok_map], bert_attn_mask=bert_attn_mask)
+        # ner_label, ner_pred = get_prediction_crf(lengths, None, out_ner)
+        dataset = TransformersNERDataset(file=None, sents=[input_sent], tokenizer=bert_tokenizer,
+                                         label2idx=self.best_model_ner.config.label2idx, is_train=False)
+        loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1, collate_fn=dataset.collate_fn)
+        ner_predictions = []
+        for batch_id, batch in enumerate(loader, 0):
+            one_batch_insts = dataset.insts[batch_id : (batch_id + 1)]
+            batch_max_scores, batch_max_ids = self.best_model_ner.decode(words=batch.input_ids.cuda(),
+                    word_seq_lens = batch.word_seq_len.cuda(),
+                    orig_to_tok_index = batch.orig_to_tok_index.cuda(),
+                    input_mask = batch.attention_mask.cuda())
+
+            for idx in range(len(batch_max_ids)):
+                length = batch.word_seq_len[idx]
+                prediction = batch_max_ids[idx][:length].tolist()
+                prediction = prediction[::-1]
+                prediction = [self.best_model_ner.config.idx2labels[l] for l in prediction]
+                one_batch_insts[idx].prediction = prediction
+                ner_predictions.append(prediction)
+
+        
+        ner_predictions[0]
+
+        prediction = [crf_out[i][:l] for i, l in enumerate(ner_predictions)]
+        if label is not None:
+            label_list = [label[i, :l].tolist() for i, l in enumerate(lengths)]
+        else:
+            label_list = []
+        return label_list, prediction
+        y_preds_ner.extend(ner_predictions)
+        argu_cands = torch.LongTensor(all_predictions)
 
 
         # prepare the bert-large-uncase tokenzier required by the tigger mdoel and argument model
@@ -650,11 +681,11 @@ class EventPipeline(nn.Module):
                 print("trigger model load from {}".format(filename_t))
             if filename_ner:
                 # arg model
-                checkpoint = torch.load(filename_ner, map_location=device)
+                # checkpoint = torch.load(filename_ner, map_location=device)
                 # self.model.load_state_dict(checkpoint['model'])
                 # self.best_model_e.load_state_dict(checkpoint['model'])
                 # self.best_model_state_dict = checkpoint['model']
-                self.best_model_ner.load_state_dict(checkpoint['model'])
+                self.best_model_ner.load_state_dict(torch.load(f"{filename_ner}/lstm_crf.m", map_location=device))
                 print("NER model load from {}".format(filename_ner))
         except BaseException as e:
             print(e)
