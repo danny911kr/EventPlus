@@ -40,7 +40,7 @@ def convert_instances_to_feature_tensors(instances: List[Instance],
                 tokens.append(sub_token)
         labels = inst.labels
         label_ids = [label2idx[label] for label in labels] if labels else [-100] * len(words)
-        input_ids = tokenizer.convert_tokens_to_ids([tokenizer.cls_token] + tokens + [tokenizer.sep_token])
+        input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
         segment_ids = [0] * len(input_ids)
         input_mask = [1] * len(input_ids)

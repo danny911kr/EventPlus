@@ -157,7 +157,7 @@ class EventPipeline(nn.Module):
             self.bias_tensor_t = self.bias_tensor_t.cuda()
             self.bias_tensor_a = self.bias_tensor_a.cuda()
 
-    def make_trigger_mask(self, argu_cands):
+    def make_trigger_mask(self, argu_cands, idx2label):
         '''
         The purpose is to set this constraint: If a position is entity, then
         this position cannot be trigger
@@ -169,15 +169,15 @@ class EventPipeline(nn.Module):
         out_mask = torch.BoolTensor(np.ones((bs, seq_len, n_tri_class)))
         for b in range(bs):
             for l in range(seq_len):
-                if argu_cands[b, l] > 1:
+                if idx2label[argu_cands[b, l].item()] not in ['O', '<START>', '<STOP>', '<PAD>']:
                     # this position is entity, mask out All tri_class except O
                     out_mask[b,l,1] = 0
-                elif argu_cands[b, l] == 1:
+                else:
                     # this position is not entity, None of tri_class should be masked out
                     out_mask[b, l] = 0
         return out_mask
 
-    def make_argu_cands_mask(self, argu_cands, n_events):
+    def make_argu_cands_mask(self, argu_cands, n_events, idx2label):
         '''
         `argu_cands` is the Padded, UN-expanded, batch-level Entity sequences
         `n_events` is the num of events in a batch
@@ -190,10 +190,10 @@ class EventPipeline(nn.Module):
             mask = torch.BoolTensor(np.ones((seq_len, n_arg_class)))
             argu_cand = argu_cands[i]
             for j, argu_tag in enumerate(argu_cand):
-                if argu_tag > 1:
+                if idx2label[argu_tag.item()] not in ['O', '<START>', '<STOP>', '<PAD>']:
                     # if the argu_tag is not O / not <PAD>, then we should not mask this position
                     mask[j] = 0
-                elif argu_tag == 1:
+                else:
                     # if the argu_tag is O, then we should only keep the O position un-masked in the num_class axis
                     mask[j, 1] = 0
 
@@ -203,7 +203,7 @@ class EventPipeline(nn.Module):
                 out_mask.extend([mask] * n_event)
         out_mask = torch.cat([x.unsqueeze(0) for x in out_mask], dim=0)
         return out_mask
-    def make_valid_argu_roles_mask_by_ent(self, argu_cands, n_events):
+    def make_valid_argu_roles_mask_by_ent(self, argu_cands, n_events, idx2label):
         '''
         `argu_cands` is the Padded, UN-expanded, batch-level Entity sequences
         `n_events` is the num of events in a batch
@@ -216,13 +216,13 @@ class EventPipeline(nn.Module):
             mask = torch.BoolTensor(np.ones((seq_len, n_arg_class)))
             argu_cand = argu_cands[i]
             for j, argu_tag in enumerate(argu_cand):
-                if argu_tag > 1:
+                if idx2label[argu_tag.item()] not in ['O', '<START>', '<STOP>', '<PAD>']:
                     # if the argu_tag is not O / not <PAD>, then we should not mask this position
                     valid_arg_idxs = self.args._ner_id_to_e_id[argu_tag]
                     mask[j, valid_arg_idxs] = 0
                     # also, keep the 'O' un-masked
                     mask[j, 1] = 0
-                elif argu_tag == 1:
+                else:
                     # if the argu_tag is O, then we should only keep the O position un-masked in the num_class axis
                     mask[j, 1] = 0
 
@@ -336,22 +336,20 @@ class EventPipeline(nn.Module):
                 length = batch.word_seq_len[idx]
                 prediction = batch_max_ids[idx][:length].tolist()
                 prediction = prediction[::-1]
-                prediction = [self.best_model_ner.config.idx2labels[l] for l in prediction]
+                prediction = [l for l in prediction]
                 one_batch_insts[idx].prediction = prediction
                 ner_predictions.append(prediction)
 
-        
-        ner_predictions[0]
+        for prediction in ner_predictions:
+            for i in range(len(prediction)):
+                curr_entity = self.best_model_ner.config.idx2labels[prediction[i]]
+                if curr_entity.startswith("S-"):
+                    prediction[i] = self.best_model_ner.config.label2idx[curr_entity.replace("S-", "B-")]
+                if curr_entity.startswith("E-"):
+                    prediction[i] = self.best_model_ner.config.label2idx[curr_entity.replace("E-", "I-")]
 
-        prediction = [crf_out[i][:l] for i, l in enumerate(ner_predictions)]
-        if label is not None:
-            label_list = [label[i, :l].tolist() for i, l in enumerate(lengths)]
-        else:
-            label_list = []
-        return label_list, prediction
         y_preds_ner.extend(ner_predictions)
-        argu_cands = torch.LongTensor(all_predictions)
-
+        argu_cands = torch.LongTensor(ner_predictions)
 
         # prepare the bert-large-uncase tokenzier required by the tigger mdoel and argument model
         MODELS = [(BertConfig, BertModel, BertTokenizer, 'bert-large-uncased')]
@@ -377,7 +375,7 @@ class EventPipeline(nn.Module):
 
         # trigger mask with given gold entities - these entities positions will be masked out, so that entities cannot be triggers
         if self.args.decode_w_trigger_mask:
-            trigger_mask = self.make_trigger_mask(argu_cands)
+            trigger_mask = self.make_trigger_mask(argu_cands, self.best_model_ner.config.idx2labels)
             if self.args.cuda:
                 trigger_mask = trigger_mask.cuda()
         else:
@@ -400,7 +398,7 @@ class EventPipeline(nn.Module):
 
         # mask of given gold entities - only these entities positions will NOT be masked, for arg role prediction
         if self.args.decode_w_ents_mask:
-            argu_cands_mask = self.make_argu_cands_mask(argu_cands, n_events)
+            argu_cands_mask = self.make_argu_cands_mask(argu_cands, n_events, self.best_model_ner.config.idx2labels)
             if self.args.cuda:
                 argu_cands_mask = argu_cands_mask.cuda()
         else:
@@ -414,7 +412,7 @@ class EventPipeline(nn.Module):
             argu_roles_mask_by_tri = None
         # mask of valid arg roles - only these valid arg roles for the given ENTITY types will be NOT be masked
         if self.args.decode_w_arg_role_mask_by_ent:
-            argu_roles_mask_by_ent = self.make_valid_argu_roles_mask_by_ent(argu_cands, n_events)
+            argu_roles_mask_by_ent = self.make_valid_argu_roles_mask_by_ent(argu_cands, n_events, self.best_model_ner.config.idx2labels)
             if self.args.cuda:
                 argu_roles_mask_by_ent = argu_roles_mask_by_ent.cuda()
         else:
@@ -447,8 +445,8 @@ class EventPipeline(nn.Module):
         y_preds_e = [[self.args._id_to_label_e[x] for x in y] for y in y_preds_e]
         y_trues_t = [[self.args._id_to_label_t[x] for x in y] for y in y_trues_t]
         y_preds_t = [[self.args._id_to_label_t[x] for x in y] for y in y_preds_t]
-        y_trues_ner = [[self.args._id_to_label_e_sent[x] for x in y] for y in y_trues_ner]
-        y_preds_ner = [[self.args._id_to_label_e_sent[x] for x in y] for y in y_preds_ner]
+        y_trues_ner = [[self.best_model_ner.config.idx2labels[x] for x in y] for y in y_trues_ner]
+        y_preds_ner = [[self.best_model_ner.config.idx2labels[x] for x in y] for y in y_preds_ner]
 
         return y_trues_t, y_preds_t, y_trues_e, y_preds_e, sent_ids_out, y_trues_ner, y_preds_ner
 

@@ -192,7 +192,8 @@ def main(args):
     # input_sent = ['Brooklyn', 'Beckham', 'asked', 'Nicola', 'Peltz', 'to', 'marry', 'him', ',', 'and', 'she', 'said', 'yes', ',', 'the', 'cameraman', 'and', 'model', 'announced', 'on', 'Saturday', '.', ' ', ' ', 'Beckham', ',', 'whose', 'parents', 'are', 'retired', 'soccer', 'star', 'David', 'Beckham', 'and', 'fashion', 'designer', 'Victoria', 'Beckham', ',', 'popped', 'the', 'big', 'question', 'two', 'weeks', 'ago', ',', 'but', 'they', "’re", 'just', 'letting', 'the', 'world', 'know', 'now', '.']
     # raw_text = 'I like pizza.\nI ate a pizza.      \n I gained weights after one month.'
     raw_text = 'Brooklyn Beckham asked Nicola Peltz to marry him , and she said yes , the cameraman and model announced on Saturday \n.\n \n\n     Beckham , whose parents are retired soccer star David Beckham and fashion designer Victoria Beckham , popped the big question two weeks ago , but they ’re just letting the world know now .'
-    # raw_text = ' \n '
+    # raw_text = 'John cannot come with us.'
+    #['John', 'cannot', 'come', 'with', 'us', '.']# raw_text = ' \n '
     import spacy
 
     nlp = spacy.load("en_core_web_sm")
